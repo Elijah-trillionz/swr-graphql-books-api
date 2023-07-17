@@ -1,78 +1,135 @@
 const express = require('express');
-const { createServer } = require('http');
-const socketio = require('socket.io');
+const { graphqlHTTP } = require('express-graphql');
+const {
+  GraphQLSchema,
+  GraphQLObjectType,
+  GraphQLList,
+  GraphQLNonNull,
+  GraphQLInt,
+  GraphQLString,
+} = require('graphql');
 const cors = require('cors');
-
 const app = express();
 
 app.use(cors());
 
-const server = createServer(app);
-const io = socketio(server);
+const authors = [
+  { id: 1, name: 'J. K. Rowling' },
+  { id: 2, name: 'J. R. R. Tolkien' },
+  { id: 3, name: 'Brent Weeks' },
+];
 
-app.all('/', (req, res) => {
-  res.send('Hello world');
+const books = [
+  { id: 1, name: 'Harry Potter and the Chamber of Secrets', authorId: 1 },
+  { id: 2, name: 'Harry Potter and the Prisoner of Azkaban', authorId: 1 },
+  { id: 3, name: 'Harry Potter and the Goblet of Fire', authorId: 1 },
+  { id: 4, name: 'The Fellowship of the Ring', authorId: 2 },
+  { id: 5, name: 'The Two Towers', authorId: 2 },
+  { id: 6, name: 'The Return of the King', authorId: 2 },
+  { id: 7, name: 'The Way of Shadows', authorId: 3 },
+  { id: 8, name: 'Beyond the Shadows', authorId: 3 },
+];
+
+const AuthorType = new GraphQLObjectType({
+  name: 'Author',
+  description: 'This represents an author of a book',
+  fields: () => ({
+    id: { type: GraphQLNonNull(GraphQLInt) },
+    name: { type: GraphQLNonNull(GraphQLString) },
+    books: {
+      type: new GraphQLList(BookType),
+      resolve: (author) => books.filter((book) => book.authorId === author.id),
+    },
+  }),
 });
 
-const users = [];
-const messages = [];
-
-const addUser = (id, username) => {
-  // make sure user is not connected already
-  const user = users.find((user) => user.id === id);
-  if (user) return;
-
-  const newUser = { id: user.length + 1, username };
-  users.push(newUser);
-  return newUser;
-};
-
-const removeUser = (id) => {
-  const userIndex = users.findIndex((user) => user.id === id);
-  if (userIndex === -1) return;
-
-  users.splice(userIndex, 1);
-  return;
-};
-
-const getCurrentUser = (id) => {
-  return users.find((user) => user.id === id);
-};
-
-const addMessage = (msg, username) => {
-  const newMessage = { id: messages.length + 1, username, msg };
-  messages.push(newMessage);
-  return newMessage;
-};
-
-io.on('connection', (socket) => {
-  socket.on('joinChat', ({ userId, username }) => {
-    const user = addUser(userId, username);
-
-    if (user.id) {
-      socket.join('group-chat');
-      socket.join(userId);
-      io.to(userId).emit('existingComments', messages);
-    }
-  });
-
-  //  listen for messages
-  socket.on('message', ({ userId, username, msg }) => {
-    const user = getCurrentUser(userId);
-    if (!user) return;
-
-    io.to('group-chat').emit('newMessage', addMessage(msg, username));
-  });
-
-  socket.on('disconnect', ({ userId }) => {
-    removeUser(userId);
-    const user = getCurrentUser();
-    socket.rooms.size = 0;
-    io.to('group-chat').emit(
-      'newNotification',
-      `${user.username} just left the chat`
-    );
-  });
+const BookType = new GraphQLObjectType({
+  name: 'Book',
+  description: 'This represents a boook written by an author',
+  fields: () => ({
+    id: { type: GraphQLNonNull(GraphQLInt) },
+    name: { type: GraphQLNonNull(GraphQLString) },
+    authorId: { type: GraphQLNonNull(GraphQLInt) },
+    author: {
+      type: AuthorType,
+      resolve: (book) => authors.find((author) => author.id === book.authorId),
+    },
+  }),
 });
 
-app.listen(5000, () => console.log('server running on port 5000'));
+const RootQueryType = new GraphQLObjectType({
+  name: 'Query',
+  description: 'Root query',
+  fields: () => ({
+    book: {
+      type: BookType,
+      description: 'A single book',
+      args: {
+        id: { type: GraphQLInt },
+      },
+      resolve: (parent, args) => books.find((book) => book.id === args.id),
+    },
+    books: {
+      type: new GraphQLList(BookType),
+      description: 'list of all books',
+      resolve: () => books,
+    },
+    author: {
+      type: AuthorType,
+      description: 'A single author',
+      args: {
+        id: { type: GraphQLInt },
+      },
+      resolve: (parent, args) =>
+        authors.find((author) => author.id === args.id),
+    },
+    authors: {
+      type: new GraphQLList(AuthorType),
+      description: 'list of all authors',
+      resolve: () => authors,
+    },
+  }),
+});
+
+const RootMutation = new GraphQLObjectType({
+  name: 'Mutations',
+  description: 'Root mutations',
+  fields: () => ({
+    addBook: {
+      type: BookType,
+      description: 'Add new book',
+      args: {
+        name: { type: GraphQLNonNull(GraphQLString) },
+        authorId: { type: GraphQLNonNull(GraphQLInt) },
+      },
+      resolve: (parent, { name, authorId }) => {
+        const book = { id: books.length + 1, name, authorId };
+        books.push(book);
+        return book;
+      },
+    },
+    addAuthor: {
+      type: AuthorType,
+      description: 'Add new author',
+      args: {
+        name: { type: GraphQLNonNull(GraphQLString) },
+      },
+      resolve: (parent, { name }) => {
+        const author = { id: authors.length + 1, name };
+        authors.push(author);
+        return author;
+      },
+    },
+  }),
+});
+
+const schema = new GraphQLSchema({
+  query: RootQueryType,
+  mutation: RootMutation,
+});
+
+app.use('/graphql', graphqlHTTP({ schema, graphiql: true }));
+
+const PORT = process.env.PORT || 5000;
+
+app.listen(PORT, () => console.log('server running on port ' + PORT));
